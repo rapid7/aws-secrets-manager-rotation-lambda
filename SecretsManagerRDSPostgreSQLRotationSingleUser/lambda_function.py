@@ -398,7 +398,7 @@ def connect_and_authenticate(secret_dict, port, dbname, use_ssl):
 
     try:
         conn = pgdb.connect(host=secret_dict['host'], user=secret_dict['username'], password=secret_dict['password'], database=dbname, port=port,
-                        connect_timeout=5, sslmode='disable')
+                        connect_timeout=5)
         logger.info("Successfully established %s connection as user '%s' with host: '%s'" % ("SSL/TLS" if use_ssl else "non SSL/TLS", secret_dict['username'], secret_dict['host']))
         return conn
     except pg.InternalError as e:
