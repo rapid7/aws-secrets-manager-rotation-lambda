@@ -665,7 +665,7 @@ def create_user_if_not_exists(service_client, current_dict, pending_dict):
                 # This default permission can be revoked or modified after the user has been created.
                 cur.execute("SELECT 1 FROM pg_roles where rolname = %s", (current_dict['username'],))
                 if len(cur.fetchall()) == 0:
-                    cur.execute("CREATE ROLE %s WITH LOGIN PASSWORD %s", (current_username, current_dict['password'],))
+                    cur.execute(("CREATE ROLE %s" % current_username) + " WITH LOGIN PASSWORD %s", (current_dict['password'],))
                     cur.execute("GRANT CONNECT ON DATABASE %s TO %s" % (current_dict['dbname'], current_username))
                     user_created = True
 
