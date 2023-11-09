@@ -36,9 +36,9 @@ for row in $(cat images.json | jq -r '.folders[] | @base64'); do
   if [[ "$registry_repo" == "$default_not_pushed_repo" ]] ; then
     pack_publish_arg=""
   fi
-  
-  # --cache-image $registry_repo_cache:$tag \
+
   pack build "$registry_repo:$tag" \
+    --cache-image $registry_repo_cache:$tag \
     --network host \
     --builder paketobuildpacks/builder-jammy-full \
     $pack_publish_arg --path $folder
