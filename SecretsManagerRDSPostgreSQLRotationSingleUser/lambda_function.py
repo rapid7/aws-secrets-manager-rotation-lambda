@@ -12,8 +12,6 @@ import pgdb
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-MAX_RDS_DB_INSTANCE_ARN_LENGTH = 256
-
 def lambda_handler(event, context):
     """Secrets Manager RDS PostgreSQL Handler
 
@@ -161,7 +159,7 @@ def set_secret(service_client, arn, token):
     current_dict = get_secret_dict(service_client, arn, "AWSCURRENT")
     pending_dict = get_secret_dict(service_client, arn, "AWSPENDING", token)
 
-    create_user_if_not_exists(service_client, current_dict, pending_dict)
+    create_user_if_not_exists(service_client, current_dict)
 
     # First try to login with the pending secret, if it succeeds, return
     conn = get_connection(pending_dict)
@@ -450,28 +448,18 @@ def get_secret_dict(service_client, arn, stage, token=None, master_secret=False)
     plaintext = secret['SecretString']
     secret_dict = json.loads(plaintext)
 
-    # Run validations against the secret
-    if master_secret and (set(secret_dict.keys()) == set(['username', 'password'])):
-        # If this is an RDS-made Master Secret, we can fetch `host` and other connection params
-        # from the DescribeDBInstances/DescribeDBClusters RDS API using the DB Instance/Cluster ARN as a filter.
-        # The DB Instance/Cluster ARN is fetched from the RDS-made Master Secret's System Tags.
-        db_instance_arn = fetch_instance_arn_from_system_tags(service_client, arn)
-        if db_instance_arn is not None:
-            secret_dict = get_connection_params_from_rds_api(secret_dict, db_instance_arn)
-            logger.info("setSecret: Successfully fetched connection params for Master Secret %s from DescribeDBInstances API." % arn)
+    if not master_secret:
+        for field in required_fields:
+            if field not in secret_dict:
+                raise KeyError("%s key is missing from secret JSON" % field)
 
-        # For non-RDS-made Master Secrets that are missing `host`, this will error below when checking for required connection params.
-
-    for field in required_fields:
-        if field not in secret_dict:
-            raise KeyError("%s key is missing from secret JSON" % field)
-
-    supported_engines = ["postgres", "aurora-postgresql"]
-    if secret_dict['engine'] not in supported_engines:
-        raise KeyError("Database engine must be set to 'postgres' in order to use this rotation lambda")
+        supported_engines = ["postgres", "aurora-postgresql"]
+        if secret_dict['engine'] not in supported_engines:
+            raise KeyError("Database engine must be set to 'postgres' in order to use this rotation lambda")
 
     # Parse and return the secret JSON string
     return secret_dict
+
 
 def is_rds_replica_database(replica_dict, master_dict):
     """Validates that the database of a secret is a replica of the database of the master secret
@@ -512,110 +500,8 @@ def is_rds_replica_database(replica_dict, master_dict):
     current_instance = instances[0]
     return master_instance_id == current_instance.get('ReadReplicaSourceDBInstanceIdentifier')
 
-def fetch_instance_arn_from_system_tags(service_client, secret_arn):
-    """Fetches DB Instance/Cluster ARN from the given secret's metadata.
 
-    Fetches DB Instance/Cluster ARN from the given secret's metadata.
-
-    Args:
-        service_client (client): The secrets manager service client
-
-        secret_arn (String): The secret ARN used in a DescribeSecrets API call to fetch the secret's metadata.
-
-    Returns:
-        db_instance_arn (String): The DB Instance/Cluster ARN of the Primary RDS Instance
-
-    """
-
-    metadata = service_client.describe_secret(SecretId=secret_arn)
-
-    if 'Tags' not in metadata:
-        logger.warning("setSecret: The secret %s is not a service-linked secret, so it does not have a tag aws:rds:primarydbinstancearn or a tag aws:rds:primarydbclusterarn" % secret_arn)
-        return None
-
-    tags = metadata['Tags']
-
-    # Check if DB Instance/Cluster ARN is present in secret Tags
-    global ARN_SYSTEM_TAG
-    db_instance_arn = None
-    for tag in tags:
-        if tag['Key'].lower() == 'aws:rds:primarydbinstancearn' or tag['Key'].lower() == 'aws:rds:primarydbclusterarn':
-            ARN_SYSTEM_TAG = tag['Key'].lower()
-            db_instance_arn = tag['Value']
-
-    # DB Instance/Cluster ARN must be present in secret System Tags to use this work-around
-    if db_instance_arn is None:
-        logger.warning("setSecret: DB Instance ARN not present in Metadata System Tags for secret %s" % secret_arn)
-    elif len(db_instance_arn) > MAX_RDS_DB_INSTANCE_ARN_LENGTH:
-        logger.error("setSecret: %s is not a valid DB Instance ARN. It exceeds the maximum length of %d." % (db_instance_arn, MAX_RDS_DB_INSTANCE_ARN_LENGTH))
-        raise ValueError("%s is not a valid DB Instance ARN. It exceeds the maximum length of %d." % (db_instance_arn, MAX_RDS_DB_INSTANCE_ARN_LENGTH))
-
-    return db_instance_arn
-
-
-def get_connection_params_from_rds_api(master_dict, master_instance_arn):
-    """Fetches connection parameters (`host`, `port`, etc.) from the DescribeDBInstances/DescribeDBClusters RDS API using `master_instance_arn` in the master secret metadata as a filter.
-
-    This helper function fetches connection parameters from the DescribeDBInstances/DescribeDBClusters RDS API using `master_instance_arn` in the master secret metadata as a filter.
-
-    Args:
-        master_dict (dictionary): The master secret dictionary that will be updated with connection parameters.
-
-        master_instance_arn (string): The DB Instance/Cluster ARN from master secret System Tags that will be used as a filter in DescribeDBInstances/DescribeDBClusters RDS API calls.
-
-    Returns:
-        master_dict (dictionary): An updated master secret dictionary that now contains connection parameters such as `host`, `port`, etc.
-
-    Raises:
-        Exception: If there is some error/throttling when calling the DescribeDBInstances/DescribeDBClusters RDS API
-
-        ValueError: If the DescribeDBInstances/DescribeDBClusters RDS API Response contains no Instances
-    """
-    # Setup the client
-    rds_client = boto3.client('rds')
-
-    if ARN_SYSTEM_TAG == 'aws:rds:primarydbinstancearn':
-        # Call DescribeDBInstances RDS API
-        try:
-            describe_response = rds_client.describe_db_instances(DBInstanceIdentifier=master_instance_arn)
-        except Exception as err:
-            logger.error("setSecret: Encountered API error while fetching connection parameters from DescribeDBInstances RDS API: %s" % err)
-            raise Exception("Encountered API error while fetching connection parameters from DescribeDBInstances RDS API: %s" % err)
-        # Verify the instance was found
-        instances = describe_response['DBInstances']
-        if len(instances) == 0:
-            logger.error("setSecret: %s is not a valid DB Instance ARN. No Instances found when using DescribeDBInstances RDS API to get connection params." % master_instance_arn)
-            raise ValueError("%s is not a valid DB Instance ARN. No Instances found when using DescribeDBInstances RDS API to get connection params." % master_instance_arn)
-
-        # put connection parameters in master secret dictionary
-        primary_instance = instances[0]
-        logger.info("primary_instance: %r" % primary_instance)
-        master_dict['host'] = primary_instance['Endpoint']['Address']
-        master_dict['port'] = primary_instance['Endpoint']['Port']
-        master_dict['engine'] = primary_instance['Engine']
-
-    elif ARN_SYSTEM_TAG == 'aws:rds:primarydbclusterarn':
-        # Call DescribeDBClusters RDS API
-        try:
-            describe_response = rds_client.describe_db_clusters(DBClusterIdentifier=master_instance_arn)
-        except Exception as err:
-            logger.error("setSecret: Encountered API error while fetching connection parameters from DescribeDBClusters RDS API: %s" % err)
-            raise Exception("Encountered API error while fetching connection parameters from DescribeDBClusters RDS API: %s" % err)
-        # Verify the instance was found
-        instances = describe_response['DBClusters']
-        if len(instances) == 0:
-            logger.error("setSecret: %s is not a valid DB Cluster ARN. No Instances found when using DescribeDBClusters RDS API to get connection params." % master_instance_arn)
-            raise ValueError("%s is not a valid DB Cluster ARN. No Instances found when using DescribeDBClusters RDS API to get connection params." % master_instance_arn)
-
-        # put connection parameters in master secret dictionary
-        primary_instance = instances[0]
-        master_dict['host'] = primary_instance['Endpoint']
-        master_dict['port'] = primary_instance['Port']
-        master_dict['engine'] = primary_instance['Engine']
-
-    return master_dict
-
-def create_user_if_not_exists(service_client, current_dict, pending_dict):
+def create_user_if_not_exists(service_client, secret_dict):
     """Creates the user if masterarn is supplied and the user does not exist in database.
 
     This function creates the user if masterarn is supplied and the user does not exist in database.
@@ -623,9 +509,7 @@ def create_user_if_not_exists(service_client, current_dict, pending_dict):
     Args:
         service_client (client): The secrets manager service client
 
-        current_dict (dictionary): The current secret dictionary
-
-        pending_dict (dictionary): The pending secret dictionary
+        secret_dict (dictionary): The pending secret dictionary
 
     Returns:
         wasCreated (bool) : whether or not the database user was created
@@ -636,18 +520,23 @@ def create_user_if_not_exists(service_client, current_dict, pending_dict):
     user_created = False
 
     # If masterarn has been given, check if the user exists and create if not.
-    if current_dict.get('masterarn'):
+    if secret_dict.get('masterarn'):
         # Use the master arn from the current secret to fetch master secret contents
-        master_arn = current_dict['masterarn']
+        master_arn = secret_dict['masterarn']
         master_dict = get_secret_dict(service_client, master_arn, "AWSCURRENT", None, True)
 
-        # Fetch dbname from the Child User
-        master_dict['dbname'] = current_dict.get('dbname', None)
+        # Add missing keys (engine, host, port) to master_dict from secret_dict
+        for key, value in secret_dict.items():
+            if not master_dict.get(key):
+                master_dict[key] = value
 
-        if current_dict['host'] != master_dict['host'] and not is_rds_replica_database(current_dict, master_dict):
+        # Fetch dbname from the Child User
+        master_dict['dbname'] = secret_dict.get('dbname', None)
+
+        if secret_dict['host'] != master_dict['host'] and not is_rds_replica_database(secret_dict, master_dict):
             # If current dict is a replica of the master dict, can proceed
-            logger.error("create_user_if_not_exists: Current database host %s is not the same host as/rds replica of master %s" % (current_dict['host'], master_dict['host']))
-            raise ValueError("Current database host %s is not the same host as/rds replica of master %s" % (current_dict['host'], master_dict['host']))
+            logger.error("create_user_if_not_exists: Current database host %s is not the same host as/rds replica of master %s" % (secret_dict['host'], master_dict['host']))
+            raise ValueError("Current database host %s is not the same host as/rds replica of master %s" % (secret_dict['host'], master_dict['host']))
 
         # Now log into the database with the master credentials
         conn = get_connection(master_dict)
@@ -658,19 +547,19 @@ def create_user_if_not_exists(service_client, current_dict, pending_dict):
         try:
             with conn.cursor() as cur:
                 # Get escaped username via quote_ident
-                cur.execute("SELECT quote_ident(%s)", (current_dict['username'],))
+                cur.execute("SELECT quote_ident(%s)", (secret_dict['username'],))
                 current_username = cur.fetchone()[0]
 
                 # Check if the user exists, if not create it and grant connect to the database
                 # This default permission can be revoked or modified after the user has been created.
-                cur.execute("SELECT 1 FROM pg_roles where rolname = %s", (current_dict['username'],))
+                cur.execute("SELECT 1 FROM pg_roles where rolname = %s", (secret_dict['username'],))
                 if len(cur.fetchall()) == 0:
-                    cur.execute(("CREATE ROLE %s" % current_username) + " WITH LOGIN PASSWORD %s", (current_dict['password'],))
-                    cur.execute("GRANT CONNECT ON DATABASE %s TO %s" % (current_dict['dbname'], current_username))
+                    cur.execute(("CREATE ROLE %s" % current_username) + " WITH LOGIN PASSWORD %s", (secret_dict['password'],))
+                    cur.execute("GRANT CONNECT ON DATABASE %s TO %s" % (secret_dict['dbname'], current_username))
                     user_created = True
 
                 conn.commit()
-                logger.info("create_user_if_not_exists: Successfully created user %s in PostgreSQL DB %s." % (current_username, current_dict['dbname']))
+                logger.info("create_user_if_not_exists: Successfully created user %s in PostgreSQL DB %s." % (current_username, secret_dict['dbname']))
         finally:
             conn.close()
 
