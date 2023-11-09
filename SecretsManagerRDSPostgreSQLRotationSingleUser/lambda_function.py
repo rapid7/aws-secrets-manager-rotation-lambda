@@ -555,7 +555,6 @@ def create_user_if_not_exists(service_client, secret_dict):
                 cur.execute("SELECT 1 FROM pg_roles where rolname = %s", (secret_dict['username'],))
                 if len(cur.fetchall()) == 0:
                     cur.execute(("CREATE ROLE %s" % current_username) + " WITH LOGIN PASSWORD %s", (secret_dict['password'],))
-                    cur.execute("GRANT CONNECT ON DATABASE %s TO %s" % (secret_dict['dbname'], current_username))
                     user_created = True
 
                 conn.commit()
