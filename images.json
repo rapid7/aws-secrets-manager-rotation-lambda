@@ -11,6 +11,14 @@
       "folder": "SecretsManagerRDSPostgreSQLRotationSingleUser",
       "python_packages": "awslambdaric boto3 PyGreSQL==5.0.7",
       "tag": "postgres-single-user"
+    },
+    {
+      "function_name": "lambda_function.lambda_handler",
+      "engine": "postgres",
+      "db_image": "postgres:15.4",
+      "folder": "SecretsManagerRDSPostgreSQLRotationMultiUser",
+      "python_packages": "awslambdaric boto3 PyGreSQL==5.0.7",
+      "tag": "postgres-multi-user"
     }
   ]
 }

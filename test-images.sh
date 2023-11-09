@@ -20,6 +20,8 @@ for row in $(cat images.json | jq -r '.folders[] | @base64'); do
 
   image_uri="${1}:$tag"
 
+  echo "Testing $image_uri"
+
   if [[ ! -d ~/.aws-lambda-rie ]]; then
     mkdir ~/.aws-lambda-rie
     curl -Lo ~/.aws-lambda-rie/aws-lambda-rie https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/latest/download/aws-lambda-rie
@@ -45,11 +47,9 @@ for row in $(cat images.json | jq -r '.folders[] | @base64'); do
     rm $test_source_file
   fi
 
-  if [[ -z "$master_secret_arn" ]]; then
-    master_secret_arn=$(aws secretsmanager create-secret --name $master_secret_name --secret-string "$master_secret_string" | jq -r .ARN)
-    echo "export MASTER_SECRET_NAME=$master_secret_name" | tee -a $test_source_file
-    echo "export MASTER_SECRET_ARN=$master_secret_arn" | tee -a $test_source_file
-  fi
+  master_secret_arn=$(aws secretsmanager create-secret --name $master_secret_name --secret-string "$master_secret_string" | jq -r .ARN)
+  echo "export MASTER_SECRET_NAME=$master_secret_name" | tee -a $test_source_file
+  echo "export MASTER_SECRET_ARN=$master_secret_arn" | tee -a $test_source_file
 
   client_request_token=request-0-3bfd-6413-b3ul-7502bdla2941
 
@@ -57,13 +57,9 @@ for row in $(cat images.json | jq -r '.folders[] | @base64'); do
   user_secret_string_single_quote="{'engine': '$engine', 'host': '$host', 'port': $port, 'dbname': '$dbname', 'username': '$username', 'password': 'changeme', 'masterarn': '$master_secret_arn'}"
   user_secret_string=$(echo $user_secret_string_single_quote | tr "'" '"')
 
-  user_secret_arn=${USER_SECRET_ARN:-}
-
-  if [[ -z "$user_secret_arn" ]]; then
-    user_secret_arn=$(aws secretsmanager create-secret --name $user_secret_name --client-request-token $client_request_token --secret-string "$user_secret_string" | jq -r .ARN)
-    echo "export USER_SECRET_NAME=$user_secret_name" | tee -a $test_source_file
-    echo "export USER_SECRET_ARN=$user_secret_arn" | tee -a $test_source_file
-  fi
+  user_secret_arn=$(aws secretsmanager create-secret --name $user_secret_name --client-request-token $client_request_token --secret-string "$user_secret_string" | jq -r .ARN)
+  echo "export USER_SECRET_NAME=$user_secret_name" | tee -a $test_source_file
+  echo "export USER_SECRET_ARN=$user_secret_arn" | tee -a $test_source_file
 
   echo "export DB_IMAGE=$db_image" | tee -a $test_source_file
   echo "export DB_ENGINE=$engine" | tee -a $test_source_file
@@ -92,28 +88,35 @@ for row in $(cat images.json | jq -r '.folders[] | @base64'); do
       --env POSTGRES_PASSWORD=postgres \
       $db_image \
       > /dev/null 2>&1
-  
+
   sleep 4
 
   source $test_source_file
 
   aws secretsmanager describe-secret --secret-id $user_secret_name
 
-  # Set the initial password and verify it works
-  NEW_PASSWORD=newPassword1 REQUEST_NUM=1 ./test-rotate.sh
-  
-  # Change the password and verify it work
-  NEW_PASSWORD=newPassword2 REQUEST_NUM=2 ./test-rotate.sh
+  if echo $tag | grep -q multi; then
+    IS_MULTI_USER=true NEW_PASSWORD=newPassword1 REQUEST_NUM=1 ./test-rotate.sh
 
-  # Change the password and verify it work
-  NEW_PASSWORD=newPassword3 REQUEST_NUM=3 ./test-rotate.sh
+    NEW_PASSWORD=newPassword2 REQUEST_NUM=2 ./test-rotate.sh
+
+    IS_MULTI_USER=true NEW_PASSWORD=newPassword3 REQUEST_NUM=3 ./test-rotate.sh
+  else
+    NEW_PASSWORD=newPassword1 REQUEST_NUM=1 ./test-rotate.sh
+
+    NEW_PASSWORD=newPassword2 REQUEST_NUM=2 ./test-rotate.sh
+
+    NEW_PASSWORD=newPassword3 REQUEST_NUM=3 ./test-rotate.sh
+  fi
 
   docker kill aws-lambda-rie && docker kill aws-lambda-rie-test-db
+
+  sleep 2
 
   aws secretsmanager delete-secret --secret-id $master_secret_name --force-delete-without-recovery
   aws secretsmanager delete-secret --secret-id $user_secret_name --force-delete-without-recovery
 
   rm $test_source_file  
 
-  sleep 1
+  sleep 2
 done

@@ -1,11 +1,13 @@
 #!/bin/bash
 
 set -euo pipefail
-set -x
+
 test_source_file=.current-test
 if [[ -f $test_source_file ]]; then
   source $test_source_file
 fi
+
+is_multi_user=${IS_MULTI_USER:-false}
 
 db_image=${DB_IMAGE:-postgres}
 engine=${DB_ENGINE:-postgres}
@@ -18,6 +20,11 @@ user_secret_name=${USER_SECRET_NAME:-}
 user_secret_arn=${USER_SECRET_ARN:-}
 
 username=user1
+
+if [[ "$is_multi_user" == "yes" || "$is_multi_user" == "true" ]]; then
+  username="${username}_clone"
+fi
+
 host=host.docker.internal
 port=5432
 dbname=postgres

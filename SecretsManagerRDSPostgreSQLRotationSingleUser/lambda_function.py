@@ -314,11 +314,9 @@ def get_connection(secret_dict):
 
     # if an 'ssl' key is not found or does not contain a valid value, attempt an SSL connection and fall back to non-SSL on failure
     conn = connect_and_authenticate(secret_dict, port, dbname, use_ssl)
-    logger.info("(use_ssl) conn %r" % conn)
     if conn or not fall_back:
         return conn
     else:
-        logger.info("falling back to connect_and_authenticate")
         return connect_and_authenticate(secret_dict, port, dbname, False)
 
 
@@ -550,8 +548,7 @@ def create_user_if_not_exists(service_client, secret_dict):
                 cur.execute("SELECT quote_ident(%s)", (secret_dict['username'],))
                 current_username = cur.fetchone()[0]
 
-                # Check if the user exists, if not create it and grant connect to the database
-                # This default permission can be revoked or modified after the user has been created.
+                # Check if the user exists, if not create it
                 cur.execute("SELECT 1 FROM pg_roles where rolname = %s", (secret_dict['username'],))
                 if len(cur.fetchall()) == 0:
                     cur.execute(("CREATE ROLE %s" % current_username) + " WITH LOGIN PASSWORD %s", (secret_dict['password'],))
