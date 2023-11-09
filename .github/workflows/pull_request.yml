@@ -22,7 +22,4 @@ jobs:
         run: |
           set -x
 
-          # pushing to ensure all works and to populate the buide cache
-          for registry_repo in $(cat images.json | jq -r '.push_to_repos | .[]'); do
-            ./build-images.sh $registry_repo
-          done
+          ./build-images.sh
