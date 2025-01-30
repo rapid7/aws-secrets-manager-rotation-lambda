@@ -1,0 +1,18 @@
+---
+info:
+  title: Aws Secrets Manager Rotation Lambda
+  description: Contains Lambda functions to be used for automatic rotation of secrets
+    stored in AWS Secrets Manager
+  x-cortex-git:
+    github:
+      alias: r7org
+      repository: rapid7/aws-secrets-manager-rotation-lambda
+  x-cortex-tag: aws-secrets-manager-rotation-lambda
+  x-cortex-type: service
+  x-cortex-domain-parents:
+  - tag: pd-services
+  x-cortex-groups:
+  - exposure:internal-ship
+openapi: 3.0.1
+servers:
+- url: "/"
